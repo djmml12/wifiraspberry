@@ -63,8 +63,8 @@ echo -e "${BOLD}Escaneando redes WiFi...${RESET}"
 
 if [[ $BACKEND == nmcli ]]; then
   # El rescan puede fallar si NetworkManager no controla la interfaz; reintentar con sudo
-  nmcli dev wifi rescan iface "$IFACE" 2>/dev/null \
-    || sudo nmcli dev wifi rescan iface "$IFACE" 2>/dev/null \
+  nmcli dev wifi rescan 2>/dev/null \
+    || sudo nmcli dev wifi rescan 2>/dev/null \
     || true
 
   # Esperar hasta 10s a que aparezcan resultados (reintento cada 2s)
@@ -72,8 +72,7 @@ if [[ $BACKEND == nmcli ]]; then
   for attempt in 1 2 3 4 5; do
     sleep 2
     mapfile -t NETWORKS < <(
-      nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list iface "$IFACE" 2>/dev/null \
-      | grep -v '^\*\?::' \
+      nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list 2>/dev/null \
       | awk -F: 'NF>=3 && $2!="" && !seen[$2]++' \
       | sort -t: -k3 -rn
     )
@@ -157,12 +156,12 @@ if [[ $BACKEND == nmcli ]]; then
     if [[ -n "$PASSWORD" ]]; then
       nmcli connection modify "$SSID" wifi-sec.psk "$PASSWORD"
     fi
-    nmcli connection up "$SSID" iface "$IFACE"
+    nmcli connection up "$SSID"
   else
     if [[ -n "$PASSWORD" ]]; then
-      nmcli dev wifi connect "$SSID" password "$PASSWORD" iface "$IFACE"
+      nmcli dev wifi connect "$SSID" password "$PASSWORD"
     else
-      nmcli dev wifi connect "$SSID" iface "$IFACE"
+      nmcli dev wifi connect "$SSID"
     fi
   fi
 else
