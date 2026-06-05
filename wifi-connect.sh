@@ -20,6 +20,24 @@ fi
 
 info "Backend detectado: $BACKEND"
 
+# ── activar WiFi ─────────────────────────────────────────────────────────────
+info "Activando WiFi..."
+if [[ $BACKEND == nmcli ]]; then
+  RADIO=$(nmcli radio wifi)
+  if [[ "$RADIO" != "enabled" ]]; then
+    nmcli radio wifi on
+    sleep 2
+    ok "WiFi activado"
+  else
+    ok "WiFi ya estaba activo"
+  fi
+else
+  # rfkill: desbloquear si estaba bloqueado por software
+  if command -v rfkill &>/dev/null; then
+    rfkill unblock wifi 2>/dev/null || true
+  fi
+fi
+
 # ── detectar interfaz WiFi ───────────────────────────────────────────────────
 if [[ $BACKEND == nmcli ]]; then
   IFACE=$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2=="wifi"{print $1; exit}')
@@ -30,16 +48,23 @@ fi
 [[ -z "$IFACE" ]] && die "No se encontró interfaz WiFi."
 info "Interfaz: $IFACE"
 
+# ── activar la interfaz si está down ─────────────────────────────────────────
+STATE=$(ip link show "$IFACE" 2>/dev/null | awk '/state/{for(i=1;i<=NF;i++) if($i=="state") print $(i+1)}')
+if [[ "$STATE" == "DOWN" ]]; then
+  info "Levantando interfaz $IFACE..."
+  sudo ip link set "$IFACE" up
+  sleep 1
+  ok "Interfaz $IFACE activa"
+fi
+
 # ── escanear redes ───────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Escaneando redes WiFi...${RESET}"
 
 if [[ $BACKEND == nmcli ]]; then
-  # forzar re-scan y esperar 3s
   nmcli dev wifi rescan iface "$IFACE" 2>/dev/null || true
   sleep 3
 
-  # leer SSIDs únicos (columna IN-USE, SSID, SIGNAL, SECURITY)
   mapfile -t NETWORKS < <(
     nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list iface "$IFACE" 2>/dev/null \
     | grep -v '^:$' \
@@ -47,7 +72,6 @@ if [[ $BACKEND == nmcli ]]; then
     | sort -t: -k3 -rn
   )
 else
-  # wpa_cli scan
   wpa_cli -i "$IFACE" scan &>/dev/null || true
   sleep 3
   mapfile -t NETWORKS < <(
@@ -120,7 +144,6 @@ echo ""
 info "Conectando a ${BOLD}$SSID${RESET}..."
 
 if [[ $BACKEND == nmcli ]]; then
-  # Si ya existe un perfil guardado para este SSID, usarlo; si no, crear uno nuevo
   if nmcli connection show "$SSID" &>/dev/null; then
     if [[ -n "$PASSWORD" ]]; then
       nmcli connection modify "$SSID" wifi-sec.psk "$PASSWORD"
@@ -133,19 +156,13 @@ if [[ $BACKEND == nmcli ]]; then
       nmcli dev wifi connect "$SSID" iface "$IFACE"
     fi
   fi
-
 else
-  # wpa_supplicant: agregar red a wpa_supplicant.conf
   CONF=/etc/wpa_supplicant/wpa_supplicant.conf
-
-  # generar bloque de red
   if [[ -n "$PASSWORD" ]]; then
     NET_BLOCK=$(wpa_passphrase "$SSID" "$PASSWORD")
   else
     NET_BLOCK=$(printf 'network={\n\tssid="%s"\n\tkey_mgmt=NONE\n}' "$SSID")
   fi
-
-  # eliminar entrada previa del mismo SSID si existe
   sudo python3 - "$SSID" "$CONF" <<'PYEOF'
 import sys, re
 ssid, path = sys.argv[1], sys.argv[2]
@@ -156,7 +173,6 @@ text = re.sub(
 )
 open(path, 'w').write(text)
 PYEOF
-
   echo "$NET_BLOCK" | sudo tee -a "$CONF" >/dev/null
   sudo wpa_cli -i "$IFACE" reconfigure &>/dev/null
   sleep 4
@@ -172,12 +188,11 @@ if [[ -n "$IP" ]]; then
   ok "Conectado a ${BOLD}$SSID${RESET}"
   ok "IP asignada: ${BOLD}$IP${RESET}"
   echo ""
-  # ping rápido para confirmar salida
   if ping -c1 -W2 8.8.8.8 &>/dev/null; then
     ok "Internet disponible"
   else
     echo -e "${YELLOW}⚠ Sin acceso a internet (puede ser normal en red local cerrada)${RESET}"
   fi
 else
-  echo -e "${YELLOW}⚠ No se obtuvo IP todavía. Espera unos segundos y verifica con: ip addr show $IFACE${RESET}"
+  echo -e "${YELLOW}⚠ No se obtuvo IP todavía. Verifica con: ip addr show $IFACE${RESET}"
 fi
