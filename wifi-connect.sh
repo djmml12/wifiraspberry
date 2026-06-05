@@ -62,15 +62,24 @@ echo ""
 echo -e "${BOLD}Escaneando redes WiFi...${RESET}"
 
 if [[ $BACKEND == nmcli ]]; then
-  nmcli dev wifi rescan iface "$IFACE" 2>/dev/null || true
-  sleep 3
+  # El rescan puede fallar si NetworkManager no controla la interfaz; reintentar con sudo
+  nmcli dev wifi rescan iface "$IFACE" 2>/dev/null \
+    || sudo nmcli dev wifi rescan iface "$IFACE" 2>/dev/null \
+    || true
 
-  mapfile -t NETWORKS < <(
-    nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list iface "$IFACE" 2>/dev/null \
-    | grep -v '^:$' \
-    | awk -F: '!seen[$2]++ && $2!=""' \
-    | sort -t: -k3 -rn
-  )
+  # Esperar hasta 10s a que aparezcan resultados (reintento cada 2s)
+  NETWORKS=()
+  for attempt in 1 2 3 4 5; do
+    sleep 2
+    mapfile -t NETWORKS < <(
+      nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY dev wifi list iface "$IFACE" 2>/dev/null \
+      | grep -v '^\*\?::' \
+      | awk -F: 'NF>=3 && $2!="" && !seen[$2]++' \
+      | sort -t: -k3 -rn
+    )
+    [[ ${#NETWORKS[@]} -gt 0 ]] && break
+    echo -e "  ${YELLOW}Intento $attempt/5 — sin resultados todavía...${RESET}"
+  done
 else
   wpa_cli -i "$IFACE" scan &>/dev/null || true
   sleep 3
